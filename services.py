@@ -1,41 +1,20 @@
 from datetime import datetime
-from sqlalchemy import func, and_
-from models import Students, Divisions, Enrollments, Courses, CourseDivisions, Departments
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from sqlalchemy import func, and_, or_
+from extensions import db
 import statistics
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-import pandas as pd
-
-
-from datetime import datetime, timedelta
-from extensions import db
-from models import Students, Enrollments, Courses, AcademicWarnings
-import logging
-from datetime import datetime
-from models import Students, Courses, Enrollments, EnrollmentPeriods, CourseDivisions, CoursePrerequisites
-
-
-from datetime import datetime
-from models import (
-    Students, Courses, Enrollments, CourseDivisions, CoursePrerequisites,
-    Classes, Professors, Departments, Divisions, Attendances, EnrollmentPeriods
-)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+import pandas as pd
+from models import (
+Students, Courses, Enrollments, CourseDivisions, CoursePrerequisites,
+    Classes, Professors, Departments, Divisions, Attendances, EnrollmentPeriods,AcademicWarnings
+)
 
-
-from datetime import datetime
-from sqlalchemy import func
-from models import EnrollmentPeriods
-
-
-from datetime import datetime
-from models import Students, Enrollments, Courses, CourseDivisions, Divisions, AcademicWarnings,CoursePrerequisites
 import logging
 
 logger = logging.getLogger(__name__)
@@ -69,6 +48,109 @@ class GraduationEligibilityService:
         "العلوم الجيولوجية": {
             "year_1_2": [1090],  
             "year_3_4": [1080]
+        }
+    }
+
+    # نظام التشعيب الأكاديمي المحدث
+    DIVISION_SYSTEM = {
+        # أكواد الشعب وما يقابلها من مسارات
+        '1030': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الأولى', 
+            'level': 1,
+            'next_options': ['1035', '1095'],
+            'description': 'مجموعة العلوم الطبيعية'
+        },
+        '1035': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثانية', 
+            'level': 2,
+            'next_options': ['1040', '1045', '1035', '1050'],
+            'description': 'الرياضيات والفيزياء'
+        },
+        '1095': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثانية', 
+            'level': 2,
+            'next_options': ['1055', '1095'],
+            'description': 'الكيمياء والفيزياء'
+        },
+        '1040': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الرياضيات الخاصة'
+        },
+        '1045': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الفيزياء الخاصة'
+        },
+        '1050': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الرياضيات وعلوم الحاسب'
+        },
+        '1055': {
+            'path': 'العلوم الطبيعية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الكيمياء الخاصة'
+        },
+        '1085': {
+            'path': 'العلوم البيولوجية', 
+            'stage': 'السنة الأولى والثانية', 
+            'level': 1,
+            'next_options': ['1060', '1065', '1070', '1075'],
+            'description': 'مجموعة العلوم البيولوجية والكيميائية'
+        },
+        '1060': {
+            'path': 'العلوم البيولوجية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'علم الحيوان'
+        },
+        '1065': {
+            'path': 'العلوم البيولوجية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'النبات والكيمياء'
+        },
+        '1070': {
+            'path': 'العلوم البيولوجية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'علم الحيوان والكيمياء'
+        },
+        '1075': {
+            'path': 'العلوم البيولوجية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الكيمياء والكيمياء الحيوية'
+        },
+        '1090': {
+            'path': 'العلوم الجيولوجية', 
+            'stage': 'السنة الأولى والثانية', 
+            'level': 1,
+            'next_options': ['1080'],
+            'description': 'مجموعة العلوم الجيولوجية والكيميائية'
+        },
+        '1080': {
+            'path': 'العلوم الجيولوجية', 
+            'stage': 'السنة الثالثة والرابعة', 
+            'level': 3,
+            'next_options': [],
+            'description': 'الجيولوجيا والكيمياء'
         }
     }
 
@@ -111,7 +193,7 @@ class GraduationEligibilityService:
             )
             
             recommendations = cls._generate_recommendations(
-                graduation_status, credits_analysis, gpa_analysis, remaining_courses
+                graduation_status, credits_analysis, gpa_analysis, remaining_courses, student_info
             )
             
             return {
@@ -145,15 +227,60 @@ class GraduationEligibilityService:
         division = Divisions.query.get(student.DivisionId)
         division_name = division.Name if division else "غير محدد"
         
+        # تحديد مرحلة الطالب الأكاديمية
+        academic_stage_info = GraduationEligibilityService._determine_academic_stage(student)
+        
         return {
             "id": student.Id,
             "name": student.Name,
             "division": division_name,
+            "division_code": str(student.DivisionId),
             "current_semester": student.Semester,
             "academic_year": academic_year,
             "status": student.status,
-            "credits_completed": student.CreditsCompleted
+            "credits_completed": student.CreditsCompleted,
+            "academic_stage": academic_stage_info
         }
+
+    @staticmethod
+    def _determine_academic_stage(student):
+        """تحديد مرحلة الطالب الأكاديمية والمواد المطلوبة"""
+        division_code = str(student.DivisionId)
+        current_semester = student.Semester
+        
+        # التحقق من وجود الشعبة في النظام
+        if division_code not in GraduationEligibilityService.DIVISION_SYSTEM:
+            return {
+                "stage": "غير محدد",
+                "specialization_status": "غير معروف",
+                "can_choose_specialization": False,
+                "available_options": [],
+                "message": "شعبة غير مسجلة في النظام"
+            }
+        
+        division_info = GraduationEligibilityService.DIVISION_SYSTEM[division_code]
+        
+        # تحديد حالة التخصص بناءً على نوع الشعبة
+        if division_info['level'] == 1:  # شعب عامة (يمكن اختيار تخصص منها)
+            can_choose = current_semester >= 3  # يمكن الاختيار من الترم 3
+            
+            return {
+                "stage": division_info['stage'],
+                "path": division_info['path'],
+                "specialization_status": "لم يتم اختيار التخصص النهائي بعد",
+                "can_choose_specialization": can_choose,
+                "available_options": division_info['next_options'],
+                "message": f"الطالب في {division_info['description']} - يمكن اختيار التخصص النهائي"
+            }
+        else:  # شعب متخصصة (تخصص نهائي)
+            return {
+                "stage": division_info['stage'],
+                "path": division_info['path'],
+                "specialization_status": "في التخصص النهائي",
+                "can_choose_specialization": False,
+                "available_options": [],
+                "message": f"الطالب في تخصص {division_info['description']}"
+            }
 
     @staticmethod
     def _analyze_credits(completed_courses, remaining_courses, division_id, actual_credits=None):
@@ -273,43 +400,111 @@ class GraduationEligibilityService:
     @staticmethod
     def _get_remaining_courses(student_id, division_id):
         try:
+            student = Students.query.get(student_id)
+            if not student:
+                return []
+                
+            # تحديد مرحلة الطالب الأكاديمية
+            academic_stage = GraduationEligibilityService._determine_academic_stage(student)
+            
             enrolled_course_ids = db.session.query(Enrollments.CourseId).filter(
                 Enrollments.StudentId == student_id,
                 Enrollments.IsCompleted.in_(["مكتملة", "قيد الدراسة"])
             ).subquery()
             
-            division_courses = db.session.query(Courses).join(
-                CourseDivisions, Courses.Id == CourseDivisions.CourseId
-            ).filter(
-                CourseDivisions.DivisionId == division_id,
-                ~Courses.Id.in_(enrolled_course_ids)
-            ).all()
-            
             remaining_courses = []
-            for course in division_courses:
-                # تحديد نوع المادة
-                division_course = db.session.query(CourseDivisions).filter(
+            
+            # إذا كان الطالب لم يختر تخصص نهائي بعد
+            if academic_stage["specialization_status"] in ["لم يتم اختيار التخصص النهائي بعد", "يجب اختيار التخصص فوراً"]:
+                # عرض المواد الحالية للشعبة الموجود فيها
+                current_division_courses = db.session.query(Courses).join(
+                    CourseDivisions, Courses.Id == CourseDivisions.CourseId
+                ).filter(
                     CourseDivisions.DivisionId == division_id,
-                    CourseDivisions.CourseId == course.Id
-                ).first()
+                    ~Courses.Id.in_(enrolled_course_ids)
+                ).all()
                 
-                course_type = "إجبارية" if division_course and division_course.IsMandatory else "اختيارية"
+                for course in current_division_courses:
+                    division_course = db.session.query(CourseDivisions).filter(
+                        CourseDivisions.DivisionId == division_id,
+                        CourseDivisions.CourseId == course.Id
+                    ).first()
+                    
+                    course_type = "إجبارية" if division_course and division_course.IsMandatory else "اختيارية"
+                    is_available = course.Status == "متاح"
+                    availability_status = "متاحة للتسجيل" if is_available else "غير متاحة حالياً"
+                    prerequisites = GraduationEligibilityService._get_course_prerequisites(course.Id, student_id)
+                    
+                    remaining_courses.append({
+                        "id": course.Id,
+                        "name": course.Name,
+                        "code": course.Code,
+                        "credits": course.Credits,
+                        "type": course_type,
+                        "availability_status": availability_status,
+                        "prerequisites": prerequisites,
+                        "semester": course.Semester,
+                        "category": "مواد الشعبة الحالية"
+                    })
                 
-                is_available = course.Status == "متاح"
-                availability_status = "متاحة للتسجيل" if is_available else "غير متاحة حالياً"
+                # إضافة معلومات عن التخصصات المتاحة
+                if academic_stage["available_options"]:
+                    available_specializations = []
+                    for option_code in academic_stage["available_options"]:
+                        if option_code in GraduationEligibilityService.DIVISION_SYSTEM:
+                            spec_info = GraduationEligibilityService.DIVISION_SYSTEM[option_code]
+                            available_specializations.append({
+                                "code": option_code,
+                                "name": spec_info["description"],
+                                "path": spec_info["path"],
+                                "stage": spec_info["stage"]
+                            })
+                    
+                    # إضافة معلومة خاصة عن التخصصات المتاحة
+                    remaining_courses.append({
+                        "id": "SPECIALIZATION_INFO",
+                        "name": "اختيار التخصص",
+                        "code": "SPEC",
+                        "credits": 0,
+                        "type": "معلومات",
+                        "availability_status": "متاح للاختيار" if academic_stage["can_choose_specialization"] else "غير متاح بعد",
+                        "prerequisites": "إنهاء متطلبات الشعبة الحالية",
+                        "semester": 0,
+                        "category": "تخصصات متاحة",
+                        "available_specializations": available_specializations
+                    })
+            
+            else:
+                # الطالب في تخصص نهائي - عرض المواد العادية
+                division_courses = db.session.query(Courses).join(
+                    CourseDivisions, Courses.Id == CourseDivisions.CourseId
+                ).filter(
+                    CourseDivisions.DivisionId == division_id,
+                    ~Courses.Id.in_(enrolled_course_ids)
+                ).all()
                 
-                prerequisites = GraduationEligibilityService._get_course_prerequisites(course.Id, student_id)
-                
-                remaining_courses.append({
-                    "id": course.Id,
-                    "name": course.Name,
-                    "code": course.Code,
-                    "credits": course.Credits,
-                    "type": course_type,
-                    "availability_status": availability_status,
-                    "prerequisites": prerequisites,
-                    "semester": course.Semester,
-                })
+                for course in division_courses:
+                    division_course = db.session.query(CourseDivisions).filter(
+                        CourseDivisions.DivisionId == division_id,
+                        CourseDivisions.CourseId == course.Id
+                    ).first()
+                    
+                    course_type = "إجبارية" if division_course and division_course.IsMandatory else "اختيارية"
+                    is_available = course.Status == "متاح"
+                    availability_status = "متاحة للتسجيل" if is_available else "غير متاحة حالياً"
+                    prerequisites = GraduationEligibilityService._get_course_prerequisites(course.Id, student_id)
+                    
+                    remaining_courses.append({
+                        "id": course.Id,
+                        "name": course.Name,
+                        "code": course.Code,
+                        "credits": course.Credits,
+                        "type": course_type,
+                        "availability_status": availability_status,
+                        "prerequisites": prerequisites,
+                        "semester": course.Semester,
+                        "category": "مواد التخصص"
+                    })
             
             return remaining_courses
             
@@ -410,29 +605,34 @@ class GraduationEligibilityService:
 
     @staticmethod
     def _get_academic_warnings(student_id):
-        """الحصول على الإنذارات الأكاديمية"""
+        """الحصول على الإنذارات الأكاديمية - مبسط"""
         try:
             active_warnings = AcademicWarnings.query.filter(
                 AcademicWarnings.StudentId == student_id,
                 AcademicWarnings.Status == "نشط"
             ).all()
             
-            return [
-                {
-                    "id": warning.Id,
-                    "type": warning.WarningType,
-                    "level": warning.WarningLevel,
-                    "description": warning.Description,
-                    "issue_date": warning.IssueDate.isoformat() if warning.IssueDate else None,
-                    "action_required": warning.ActionRequired,
-                    "is_active": warning.Status == "نشط",
-                    "semester": warning.Semester
+            if not active_warnings:
+                return {
+                    "has_warnings": False,
+                    "count": 0,
+                    "types": []
                 }
-                for warning in active_warnings
-            ]
+            
+            warning_types = list(set([warning.WarningType for warning in active_warnings]))
+            
+            return {
+                "has_warnings": True,
+                "count": len(active_warnings),
+                "types": warning_types
+            }
         except Exception as e:
             logger.error(f"Error getting academic warnings: {str(e)}")
-            return []
+            return {
+                "has_warnings": False,
+                "count": 0,
+                "types": []
+            }
 
     @staticmethod
     def _determine_graduation_status(credits_analysis, cumulative_gpa, warnings):
@@ -440,7 +640,7 @@ class GraduationEligibilityService:
         
         gpa_meets_requirement = cumulative_gpa >= GraduationEligibilityService.MINIMUM_GPA
         
-        has_active_warnings = len([w for w in warnings if w.get("is_active", False)]) > 0
+        has_active_warnings = warnings.get("has_warnings", False)
         
         if credits_complete and gpa_meets_requirement and not has_active_warnings:
             status = "مؤهل للتخرج"
@@ -456,8 +656,9 @@ class GraduationEligibilityService:
             message = f"يجب رفع المعدل التراكمي إلى {GraduationEligibilityService.MINIMUM_GPA} على الأقل"
             eligible = False
         elif has_active_warnings:
+            warning_types_text = " و ".join(warnings.get("types", []))
             status = "مشروط - إنذارات أكاديمية"
-            message = "يجب حل الإنذارات الأكاديمية أولاً"
+            message = f"يجب حل الإنذارات الأكاديمية أولاً ({warning_types_text})"
             eligible = False
         else:
             status = "غير مؤهل - متطلبات متعددة"
@@ -503,9 +704,33 @@ class GraduationEligibilityService:
         }
 
     @staticmethod
-    def _generate_recommendations(graduation_status, credits_analysis, gpa_analysis, remaining_courses):
+    def _generate_recommendations(graduation_status, credits_analysis, gpa_analysis, remaining_courses, student_info=None):
         recommendations = []
         
+        # التحقق من وجود معلومات الطالب
+        if student_info and "academic_stage" in student_info:
+            academic_stage = student_info["academic_stage"]
+            
+            # توصيات خاصة بالطلاب اللي لسه مختاروش تخصص
+            if academic_stage["specialization_status"] == "لم يتم اختيار التخصص النهائي بعد":
+                if academic_stage["can_choose_specialization"]:
+                    available_specs = [
+                        GraduationEligibilityService.DIVISION_SYSTEM.get(opt, {}).get('description', opt) 
+                        for opt in academic_stage.get('available_options', [])
+                    ]
+                    recommendations.append({
+                        "type": "تخصص",
+                        "priority": "عالية",
+                        "message": f"يمكنك اختيار التخصص النهائي. التخصصات المتاحة: {', '.join(available_specs)}"
+                    })
+                else:
+                    recommendations.append({
+                        "type": "أكاديمي",
+                        "priority": "متوسطة",
+                        "message": f"أكمل مواد {academic_stage['stage']} أولاً قبل اختيار التخصص النهائي"
+                    })
+        
+        # التوصيات العادية للتخرج
         if not graduation_status["eligible"]:
             if not graduation_status["requirements_met"]["credits"]:
                 remaining_credits = credits_analysis["remaining_total"]
@@ -533,9 +758,10 @@ class GraduationEligibilityService:
                     "message": f"يجب رفع المعدل التراكمي من {gpa_analysis['current_gpa']} إلى {GraduationEligibilityService.MINIMUM_GPA} على الأقل"
                 })
         
-        available_courses = [course for course in remaining_courses if course["availability_status"] == "متاحة للتسجيل"]
+        # توصيات المواد المتاحة
+        available_courses = [course for course in remaining_courses if course.get("availability_status") == "متاحة للتسجيل" and course.get("id") != "SPECIALIZATION_INFO"]
         if available_courses:
-            mandatory_available = [c for c in available_courses if c["type"] == "إجبارية"]
+            mandatory_available = [c for c in available_courses if c.get("type") == "إجبارية"]
             if mandatory_available:
                 recommendations.append({
                     "type": "تسجيل",
@@ -543,7 +769,7 @@ class GraduationEligibilityService:
                     "message": f"يوجد {len(mandatory_available)} مادة إجبارية متاحة للتسجيل حالياً"
                 })
         
-        unavailable_courses = [course for course in remaining_courses if course["availability_status"] != "متاحة للتسجيل"]
+        unavailable_courses = [course for course in remaining_courses if course.get("availability_status") != "متاحة للتسجيل" and course.get("id") != "SPECIALIZATION_INFO"]
         if unavailable_courses:
             recommendations.append({
                 "type": "تخطيط",
@@ -787,11 +1013,6 @@ class EnrollmentPeriodService:
             return "منتهية"
         else:
             return "نشطة" 
-
-
-
-
-
 
 class SmartCourseRecommendationService:
 
@@ -2928,6 +3149,7 @@ class AcademicWarningService:
             db.session.rollback()
             self.logger.error(f"خطأ في فحص وحل الإنذارات: {str(e)}")
             return 0
+
 class AcademicStatusAnalysisService:
     
     @staticmethod
@@ -5336,7 +5558,6 @@ class AcademicStatusAnalysisService:
             ])
         
         return strategies 
-
 class AcademicPathService:
     """خدمة التخطيط الأكاديمي للمسارات"""
     
