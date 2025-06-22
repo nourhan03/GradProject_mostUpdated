@@ -6352,10 +6352,6 @@ class VerySmartAcademicPathPlanningService:
     def __init__(self):
         # استيراد الخدمات الموجودة لتجنب التكرار
         try:
-            from course_recommendation.services import SmartCourseRecommendationService
-            from academic_status_analysis.services import AcademicStatusAnalysisService
-            from academic_warning.services import AcademicWarningService
-            from graduation_eligibility.services import GraduationEligibilityService
             
             # الخدمات الموجودة
             self.path_service = AcademicPathService()
