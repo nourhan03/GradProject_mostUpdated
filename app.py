@@ -4,6 +4,7 @@ from flask_restful import Api
 from extensions import db, socketio, scheduler
 from resourses import *
 from services import *
+from scheduler import AcademicWarningScheduler
 import signal
 import sys
 import urllib.parse
