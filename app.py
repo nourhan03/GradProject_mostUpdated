@@ -2,36 +2,8 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_restful import Api
 from extensions import db, socketio, scheduler
-from enrollment_period import EnrollmentPeriodResource, CurrentEnrollmentPeriodResource
-from course_recommendation import SmartRecommendationsResource, MandatoryCoursesRecommendationResource, ElectiveCoursesRecommendationResource, FailedCoursesRetryRecommendationResource, GPAImprovementRecommendationResource, MissedMandatoryCoursesResource, FutureMandatoryCoursesResource
-from course_enrollment import CourseEnrollmentResource, CourseEnrollmentCancellationResource, CourseEnrollmentHardDeleteResource, StudentEnrollmentStatusResource
-from graduation_eligibility import GraduationEligibilityResource, GraduationSummaryResource
-from academic_warning import AcademicWarningResource, ResolveWarningResource, WarningStatsResource, StudentWarningCheckResource, AcademicWarningScheduler, StudentWarningResolveResource
-from academic_status_analysis import (
-    AcademicStatusAnalysisResource, 
-    StudentBasicInfoResource,
-    GPAAnalysisResource, 
-    PerformancePatternsResource,
-    RiskAssessmentResource,
-    CourseAnalysisResource,
-    AttendanceAnalysisResource,
-    AcademicWarningsSummaryResource,
-    PeerComparisonResource,
-    PredictionsResource,
-    InterventionsResource,
-    AIInsightsResource
-)
-from academic_path_planning import (
-    AcademicPathPlanningResource,
-    PathRecommendationResource,
-    StudentPathProgressResource,
-    PathValidationResource,
-    DivisionTransitionResource,
-    VerySmartAcademicPathPlanningResource,
-    SmartPathAnalysisResource,
-    AcademicSmartRecommendationsResource,
-    StudentPerformancePredictionResource
-)
+from resourses import *
+from services import *
 import signal
 import sys
 import urllib.parse
