@@ -1,6 +1,8 @@
 from datetime import datetime
 from flask import request
 from flask_restful import Resource
+from sqlalchemy import func, and_
+from extensions import db
 from services import (
 AcademicPathService, 
 DivisionRecommendationService, 
@@ -9,26 +11,16 @@ AcademicStatusAnalysisService,
 AcademicWarningService,
 CourseEnrollmentService,
 SmartCourseRecommendationService,
-EnrollmentPeriodService
+EnrollmentPeriodService,
+GraduationEligibilityService
 )
-from datetime import datetime
-
-from datetime import datetime
-from flask import request, jsonify
-from models import AcademicWarnings, Students
-from extensions import db
+from models import ( 
+    AcademicWarnings, Students
+)
 import logging
 
 logger = logging.getLogger(__name__)
 
-
-from datetime import datetime
-from flask import request
-
-from datetime import datetime
-from flask import request, jsonify
-from .services import GraduationEligibilityService
-import logging
 
 
 class GraduationEligibilityResource(Resource):
@@ -98,7 +90,7 @@ class GraduationSummaryResource(Resource):
                     "completed_courses": len(full_result["completed_courses"]),
                     "remaining_courses": len(full_result["remaining_courses"]),
                     "failed_courses": len(full_result["failed_courses"]),
-                    "active_warnings": len([w for w in full_result["academic_warnings"] if w.get("is_active", False)])
+                    "active_warnings": full_result["academic_warnings"].get("count", 0)
                 },
                 "top_recommendations": full_result["recommendations"][:3],  
                 "generated_at": full_result["generated_at"]
@@ -225,14 +217,6 @@ class CurrentEnrollmentPeriodResource(Resource):
                 "status": "فشل",
                 "message": f"حدث خطأ أثناء البحث عن فترة التسجيل الحالية: {str(e)}"
             }, 500
-
-
-
-
-
-
-
-
 
 class SmartRecommendationsResource(Resource):
     
@@ -727,6 +711,7 @@ class FutureMandatoryCoursesResource(Resource):
             logger.error(f"Error in future mandatory courses API: {str(e)}")
             return {"error": str(e)}, 500
 
+
 class CourseEnrollmentResource(Resource):
     
     def post(self, student_id):
@@ -865,6 +850,7 @@ class StudentEnrollmentStatusResource(Resource):
             }, 500
 
 
+
 class AcademicWarningResource(Resource):
     
     def __init__(self):
@@ -991,8 +977,7 @@ class WarningStatsResource(Resource):
     def get(self):
         """إحصائيات الإنذارات الأكاديمية"""
         try:
-            from sqlalchemy import func
-            from models import AcademicWarnings
+           
             
             # إحصائيات عامة
             total_active = AcademicWarnings.query.filter_by(Status='نشط').count()
@@ -1098,6 +1083,7 @@ class StudentWarningResolveResource(Resource):
         except Exception as e:
             logger.error(f"خطأ في حل إنذارات الطالب: {str(e)}")
             return {'error': 'حدث خطأ في حل إنذارات الطالب'}, 500
+
 class AcademicStatusAnalysisResource(Resource):
     def get(self, student_id):
   
