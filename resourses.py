@@ -1,25 +1,25 @@
-from datetime import datetime
 from flask import request
-from flask_restful import Resource
-from sqlalchemy import func, and_
+from datetime import datetime
+from flask import request, jsonify
+from models import AcademicWarnings, Students
 from extensions import db
-from services import (
-AcademicPathService, 
-DivisionRecommendationService, 
-VerySmartAcademicPathPlanningService,
-AcademicStatusAnalysisService,
-AcademicWarningService,
-CourseEnrollmentService,
-SmartCourseRecommendationService,
-EnrollmentPeriodService,
-GraduationEligibilityService
-)
-from models import ( 
-    AcademicWarnings, Students
-)
+from flask_restful import Resource
+from services import(
+    AcademicPathPlanningService,
+    AcademicStatusAnalysisService,
+    AcademicStatusAnalysisService,
+    AcademicWarningService,
+    CourseEnrollmentService,
+    SmartCourseRecommendationService,
+    EnrollmentPeriodService,
+    GraduationEligibilityService
+    
+) 
+
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 
 
@@ -105,6 +105,7 @@ class GraduationSummaryResource(Resource):
                 "message": "حدث خطأ أثناء الحصول على ملخص حالة التخرج",
                 "error": str(e)
             }, 500
+
 
 class EnrollmentPeriodResource(Resource):
     
@@ -217,7 +218,6 @@ class CurrentEnrollmentPeriodResource(Resource):
                 "status": "فشل",
                 "message": f"حدث خطأ أثناء البحث عن فترة التسجيل الحالية: {str(e)}"
             }, 500
-
 class SmartRecommendationsResource(Resource):
     
     def __init__(self):
@@ -712,6 +712,7 @@ class FutureMandatoryCoursesResource(Resource):
             return {"error": str(e)}, 500
 
 
+
 class CourseEnrollmentResource(Resource):
     
     def post(self, student_id):
@@ -851,6 +852,8 @@ class StudentEnrollmentStatusResource(Resource):
 
 
 
+
+
 class AcademicWarningResource(Resource):
     
     def __init__(self):
@@ -977,7 +980,8 @@ class WarningStatsResource(Resource):
     def get(self):
         """إحصائيات الإنذارات الأكاديمية"""
         try:
-           
+            from sqlalchemy import func
+            from models import AcademicWarnings
             
             # إحصائيات عامة
             total_active = AcademicWarnings.query.filter_by(Status='نشط').count()
@@ -1340,370 +1344,115 @@ class AIInsightsResource(Resource):
                 "data": None
             }, 500 
 
+
 class AcademicPathPlanningResource(Resource):
+    """موقع API للحصول على الخطة الأكاديمية الشاملة للطالب"""
     
     def __init__(self):
-        self.path_service = AcademicPathService()
+        self.service = AcademicPathPlanningService()
     
     def get(self, student_id):
+        """الحصول على الخطة الأكاديمية الشاملة للطالب"""
         try:
-            result = self.path_service.get_student_academic_path(student_id)
-            
-            if not result:
-                return {'message': 'الطالب غير موجود'}, 404
-            
-            return result, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في استرجاع الخطة الأكاديمية: {str(e)}'}, 500
-
-
-class PathRecommendationResource(Resource):
-    
-    def __init__(self):
-        self.recommendation_service = DivisionRecommendationService()
-    
-    def get(self, student_id):
-        try:
-            result = self.recommendation_service.get_division_recommendations(student_id)
-            
-            if not result:
-                return {'message': 'الطالب غير موجود'}, 404
-            
-            return result, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في توليد التوصيات: {str(e)}'}, 500
-
-
-class StudentPathProgressResource(Resource):
-    
-    def __init__(self):
-        self.path_service = AcademicPathService()
-    
-    def get(self, student_id):
-        try:
-            result = self.path_service.get_student_academic_path(student_id)
-            
-            if not result:
-                return {'message': 'الطالب غير موجود'}, 404
-            
-            return {
-                'student_info': result['student_info'],
-                'progress': result['progress'],
-                'current_path': result['current_path']
-            }, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في استرجاع تقدم الطالب: {str(e)}'}, 500
-
-
-class PathValidationResource(Resource):
-    
-    def __init__(self):
-        self.path_service = AcademicPathService()
-    
-    def get(self, student_id):
-        try:
-            result = self.path_service.get_student_academic_path(student_id)
-            
-            if not result:
-                return {'message': 'الطالب غير موجود'}, 404
-            
-            validation_result = {
-                'student_id': student_id,
-                'is_valid_path': True,
-                'validation_issues': [],
-                'recommendations': [],
-                'eligibility': result['progress']['transition_eligibility']
-            }
-            
-            progress = result['progress']
-            
-            if progress['cumulative_gpa']['current_cumulative'] < 2.0:
-                validation_result['is_valid_path'] = False
-                validation_result['validation_issues'].append('المعدل التراكمي أقل من الحد الأدنى المطلوب')
-                validation_result['recommendations'].append('ضرورة تحسين المعدل التراكمي قبل المتابعة')
-            
-            expected_credits = progress['current_year'] * 30
-            if progress['credits_completed'] < expected_credits * 0.8:  # 80% من الساعات المتوقعة
-                validation_result['validation_issues'].append('نقص في الساعات المكتملة مقارنة بالمتوقع')
-                validation_result['recommendations'].append('زيادة عدد الساعات المسجلة في الفصول القادمة')
-            
-            if not progress['next_available_divisions']:
-                current_year = progress['current_year']
-                if current_year >= 2:  # يجب أن تكون هناك خيارات متاحة
-                    validation_result['validation_issues'].append('لا توجد تشعيبات متاحة للانتقال')
-                    validation_result['recommendations'].append('مراجعة المرشد الأكاديمي لتحديد الخيارات المتاحة')
-            
-            return validation_result, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في التحقق من صحة المسار: {str(e)}'}, 500
-
-
-class DivisionTransitionResource(Resource):
-    """مورد طلبات الانتقال بين التشعيبات"""
-    
-    def __init__(self):
-        self.path_service = AcademicPathService()
-        self.recommendation_service = DivisionRecommendationService()
-    
-    def get(self, student_id):
-        """الحصول على معلومات الانتقال المتاحة للطالب"""
-        try:
-            # الحصول على التشعيبات المتاحة
-            path_result = self.path_service.get_student_academic_path(student_id)
-            
-            if not path_result:
-                return {'message': 'الطالب غير موجود'}, 404
-            
-            # الحصول على توصيات التشعيب
-            recommendations = self.recommendation_service.get_division_recommendations(student_id)
-            
-            transition_info = {
-                'student_id': student_id,
-                'current_division': path_result['student_info']['division_name'],
-                'available_transitions': path_result['progress']['next_available_divisions'],
-                'eligibility': path_result['progress']['transition_eligibility'],
-                'recommendations': recommendations['recommendations'] if recommendations else [],
-                'transition_requirements': self._get_transition_requirements(),
-                'deadlines': self._get_transition_deadlines()
-            }
-            
-            return transition_info, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في استرجاع معلومات الانتقال: {str(e)}'}, 500
-    
-    def post(self, student_id):
-        """تقديم طلب انتقال لتشعيب جديد"""
-        try:
-            data = request.get_json()
-            
-            if not data or 'target_division_id' not in data:
-                return {'message': 'معرف التشعيب المطلوب مطلوب'}, 400
-            
-            target_division_id = data['target_division_id']
-            reason = data.get('reason', '')
-            
-            # التحقق من صحة الطلب
-            validation_result = self._validate_transition_request(student_id, target_division_id)
-            
-            if not validation_result['is_valid']:
-                return {
-                    'message': 'طلب الانتقال غير صالح',
-                    'errors': validation_result['errors']
-                }, 400
-            
-            # في التطبيق الحقيقي، هنا سيتم حفظ الطلب في قاعدة البيانات
-            # لكن حالياً سنرجع رسالة نجاح فقط
-            
-            return {
-                'message': 'تم تقديم طلب الانتقال بنجاح',
-                'request_id': f'TR_{student_id}_{target_division_id}_{int(datetime.now().timestamp())}',
-                'status': 'pending_review',
-                'submitted_at': datetime.now().isoformat(),
-                'target_division_id': target_division_id,
-                'reason': reason
-            }, 201
-            
-        except Exception as e:
-            return {'message': f'خطأ في تقديم طلب الانتقال: {str(e)}'}, 500
-    
-    def _validate_transition_request(self, student_id, target_division_id):
-        """التحقق من صحة طلب الانتقال"""
-        validation_result = {
-            'is_valid': True,
-            'errors': []
-        }
-        
-        try:
-            # الحصول على معلومات الطالب
-            path_result = self.path_service.get_student_academic_path(student_id)
-            
-            if not path_result:
-                validation_result['is_valid'] = False
-                validation_result['errors'].append('الطالب غير موجود')
-                return validation_result
-            
-            # التحقق من أهلية الانتقال
-            eligibility = path_result['progress']['transition_eligibility']
-            if not eligibility['is_eligible']:
-                validation_result['is_valid'] = False
-                validation_result['errors'].extend(eligibility['requirements_missing'])
-            
-            # التحقق من أن التشعيب المطلوب متاح
-            available_divisions = path_result['progress']['next_available_divisions']
-            available_division_ids = [div['id'] for div in available_divisions]
-            
-            if target_division_id not in available_division_ids:
-                validation_result['is_valid'] = False
-                validation_result['errors'].append('التشعيب المطلوب غير متاح للانتقال')
-            
-            return validation_result
-            
-        except Exception as e:
-            validation_result['is_valid'] = False
-            validation_result['errors'].append(f'خطأ في التحقق من الطلب: {str(e)}')
-            return validation_result
-    
-    def _get_transition_requirements(self):
-        """متطلبات الانتقال العامة"""
-        return {
-            'minimum_gpa': 2.0,
-            'minimum_credits': 'حسب السنة الأكاديمية',
-            'application_deadline': 'نهاية الأسبوع الثاني من الفصل الدراسي',
-            'required_documents': [
-                'استمارة طلب الانتقال',
-                'كشف الدرجات',
-                'موافقة المرشد الأكاديمي'
-            ]
-        }
-    
-    def _get_transition_deadlines(self):
-        """مواعيد تقديم طلبات الانتقال"""
-        return {
-            'fall_semester': 'نهاية سبتمبر',
-            'spring_semester': 'نهاية فبراير',
-            'summer_semester': 'نهاية يونيو',
-            'note': 'يجب تقديم الطلب قبل بداية الفصل الدراسي بأسبوعين على الأقل'
-        }
-
-
-class VerySmartAcademicPathPlanningResource(Resource):
-    """مورد التخطيط الأكاديمي الذكي المتقدم"""
-    
-    def __init__(self):
-        self.smart_service = VerySmartAcademicPathPlanningService()
-    
-    def get(self, student_id):
-        """الحصول على الخطة الأكاديمية الذكية المتقدمة للطالب"""
-        try:
-            result = self.smart_service.get_very_smart_academic_plan(student_id)
+            result = self.service.get_academic_plan(student_id)
             
             if 'error' in result:
-                return {'message': result['error']}, 404 if 'غير موجود' in result['error'] else 500
-            
-            return result, 200
-            
-        except Exception as e:
-            return {'message': f'خطأ في استرجاع الخطة الذكية: {str(e)}'}, 500
-
-
-class SmartPathAnalysisResource(Resource):
-    """مورد التحليل الذكي للمسار الأكاديمي"""
-    
-    def __init__(self):
-        self.smart_service = VerySmartAcademicPathPlanningService()
-    
-    def get(self, student_id):
-        """الحصول على التحليل الذكي فقط بدون الخطة الكاملة"""
-        try:
-            # الحصول على البيانات الشاملة
-            comprehensive_data = self.smart_service._gather_comprehensive_data(student_id)
-            
-            if 'error' in comprehensive_data:
-                return {'message': comprehensive_data['error']}, 404 if 'غير موجود' in comprehensive_data['error'] else 500
-            
-            # تطبيق التحليل الذكي فقط
-            ai_analysis = self.smart_service._apply_ai_analysis(comprehensive_data)
+                return {'message': result['error'], 'status': 'error'}, 404
             
             return {
-                'student_id': student_id,
-                'data_quality': comprehensive_data.get('data_quality', {}),
-                'ai_analysis': ai_analysis,
-                'generated_at': datetime.now().isoformat()
+                'message': 'تم الحصول على الخطة الأكاديمية بنجاح',
+                'status': 'success',
+                'data': result
             }, 200
             
         except Exception as e:
-            return {'message': f'خطأ في التحليل الذكي: {str(e)}'}, 500
+            logger.error(f"خطأ في الحصول على الخطة الأكاديمية: {str(e)}")
+            return {
+                'message': f'حدث خطأ أثناء الحصول على الخطة الأكاديمية: {str(e)}',
+                'status': 'error'
+            }, 500
 
 
-class AcademicSmartRecommendationsResource(Resource):
-    """مورد التوصيات الذكية الأكاديمية"""
+class DivisionRecommendationResource(Resource):
+    """موقع API لاقتراح الشعبة/التخصص للطالب"""
     
     def __init__(self):
-        self.smart_service = VerySmartAcademicPathPlanningService()
+        self.service = AcademicPathPlanningService()
     
     def get(self, student_id):
-        """الحصول على التوصيات الذكية المخصصة للطالب"""
+        """الحصول على توصية الشعبة/التخصص للطالب"""
         try:
-            # الحصول على الخطة الأكاديمية الكاملة
-            full_plan = self.smart_service.get_very_smart_academic_plan(student_id)
+            result = self.service.get_division_recommendations(student_id)
             
-            if 'error' in full_plan:
-                return full_plan, 404
+            if 'error' in result:
+                return {'message': result['error'], 'status': 'error'}, 404
             
-            # استخراج التوصيات المهمة
-            recommendations = {
-                'student_id': student_id,
-                'smart_plan_summary': full_plan.get('smart_academic_plan', {}).get('plan_summary', {}),
-                'optimization_recommendations': full_plan.get('optimization_recommendations', {}),
-                'ai_insights': {
-                    'learning_patterns': full_plan.get('ai_insights', {}).get('learning_patterns', {}),
-                    'risk_analysis': full_plan.get('ai_insights', {}).get('risk_analysis', {}),
-                    'career_alignment': full_plan.get('ai_insights', {}).get('career_alignment', {})
-                },
-                'future_predictions': full_plan.get('future_predictions', {}),
-                'priority_actions': self._extract_priority_actions(full_plan),
-                'generated_at': datetime.now().isoformat()
-            }
-            
-            return recommendations, 200
+            return {
+                'message': 'تم الحصول على توصيات التخصص بنجاح',
+                'status': 'success',
+                'data': result
+            }, 200
             
         except Exception as e:
-            return {'message': f'خطأ في الحصول على التوصيات الذكية: {str(e)}'}, 500
-    
-    def _extract_priority_actions(self, full_plan):
-        """استخراج الإجراءات ذات الأولوية"""
-        priority_actions = []
-        
-        # من الخطة قصيرة المدى
-        short_term = full_plan.get('smart_academic_plan', {}).get('short_term', {})
-        priority_actions.extend(short_term.get('priorities', [])[:3])
-        
-        # من تحليل المخاطر
-        risk_analysis = full_plan.get('ai_insights', {}).get('risk_analysis', {})
-        if risk_analysis.get('level') in ['عالي', 'عالي جداً']:
-            priority_actions.extend(risk_analysis.get('mitigation_strategies', [])[:2])
-        
-        return priority_actions[:5]  # أول 5 إجراءات
+            logger.error(f"خطأ في الحصول على توصيات التخصص: {str(e)}")
+            return {
+                'message': f'حدث خطأ أثناء الحصول على توصيات التخصص: {str(e)}',
+                'status': 'error'
+            }, 500
 
 
-class StudentPerformancePredictionResource(Resource):
-    """مورد التنبؤ بأداء الطالب"""
+class CourseScheduleResource(Resource):
+    """موقع API للحصول على جدولة المقررات للفصول القادمة"""
     
     def __init__(self):
-        self.smart_service = VerySmartAcademicPathPlanningService()
+        self.service = AcademicPathPlanningService()
     
     def get(self, student_id):
-        """الحصول على تنبؤات الأداء للطالب"""
+        """الحصول على جدولة المقررات للفصول القادمة"""
         try:
-            # الحصول على البيانات والتحليل
-            comprehensive_data = self.smart_service._gather_comprehensive_data(student_id)
+            semester_count = request.args.get('semester_count', 2, type=int)
+            result = self.service.get_course_schedule(student_id, semester_count)
             
-            if 'error' in comprehensive_data:
-                return {'message': comprehensive_data['error']}, 404 if 'غير موجود' in comprehensive_data['error'] else 500
+            if 'error' in result:
+                return {'message': result['error'], 'status': 'error'}, 404
             
-            ai_analysis = self.smart_service._apply_ai_analysis(comprehensive_data)
-            future_predictions = self.smart_service._predict_future_paths(comprehensive_data, ai_analysis)
-            
-            predictions = {
-                'student_id': student_id,
-                'performance_prediction': ai_analysis.get('performance_prediction', {}),
-                'future_paths': future_predictions,
-                'risk_analysis': ai_analysis.get('risk_analysis', {}),
-                'opportunities_threats': ai_analysis.get('opportunities_threats', {}),
-                'confidence_metrics': {
-                    'data_quality_score': comprehensive_data.get('data_quality', {}).get('score', 0),
-                    'prediction_confidence': ai_analysis.get('performance_prediction', {}).get('confidence_level', 0),
-                    'overall_ai_score': ai_analysis.get('overall_ai_score', {}).get('score', 0)
-                },
-                'generated_at': datetime.now().isoformat()
-            }
-            
-            return predictions, 200
+            return {
+                'message': f'تم الحصول على جدولة المقررات بنجاح',
+                'status': 'success',
+                'data': result
+            }, 200
             
         except Exception as e:
-            return {'message': f'خطأ في التنبؤ بالأداء: {str(e)}'}, 500 
+            logger.error(f"خطأ في الحصول على جدولة المقررات: {str(e)}")
+            return {
+                'message': f'حدث خطأ أثناء الحصول على جدولة المقررات: {str(e)}',
+                'status': 'error'
+            }, 500
+
+
+class StudentPerformanceAnalysisResource(Resource):
+    """موقع API لتحليل أداء الطالب الأكاديمي"""
+    
+    def __init__(self):
+        self.service = AcademicPathPlanningService()
+    
+    def get(self, student_id):
+        """تحليل أداء الطالب الأكاديمي"""
+        try:
+            result = self.service.analyze_student_performance(student_id)
+            
+            if 'error' in result:
+                return {'message': result['error'], 'status': 'error'}, 404
+            
+            return {
+                'message': 'تم تحليل أداء الطالب بنجاح',
+                'status': 'success',
+                'data': result
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"خطأ في تحليل أداء الطالب: {str(e)}")
+            return {
+                'message': f'حدث خطأ أثناء تحليل أداء الطالب: {str(e)}',
+                'status': 'error'
+            }, 500 
