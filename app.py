@@ -2,9 +2,9 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_restful import Api
 from extensions import db, socketio, scheduler
-from resourses import *
-from services import *
-from scheduler import AcademicWarningScheduler
+from resourses import * 
+from services import * 
+from scheduler import * 
 import signal
 import sys
 import urllib.parse
@@ -118,18 +118,11 @@ def create_app(config_name='default'):
     api.add_resource(InterventionsResource, '/api/academic-status/interventions/<int:student_id>')
     api.add_resource(AIInsightsResource, '/api/academic-status/ai-insights/<int:student_id>')
 
-    # Academic Path Planning
+    # Academic Path Planning - التخطيط الأكاديمي المطور
     api.add_resource(AcademicPathPlanningResource, '/api/academic-path-planning/<int:student_id>')
-    api.add_resource(PathRecommendationResource, '/api/path-recommendations/<int:student_id>')
-    api.add_resource(StudentPathProgressResource, '/api/path-progress/<int:student_id>')
-    api.add_resource(PathValidationResource, '/api/path-validation/<int:student_id>')
-    api.add_resource(DivisionTransitionResource, '/api/division-transition/<int:student_id>')
-
-    # Very Smart Academic Path Planning - AI Enhanced
-    api.add_resource(VerySmartAcademicPathPlanningResource, '/api/very-smart-academic-planning/<int:student_id>')
-    api.add_resource(SmartPathAnalysisResource, '/api/smart-path-analysis/<int:student_id>')
-    api.add_resource(AcademicSmartRecommendationsResource, '/api/academic-smart-recommendations/<int:student_id>')
-    api.add_resource(StudentPerformancePredictionResource, '/api/performance-prediction/<int:student_id>')
+    api.add_resource(DivisionRecommendationResource, '/api/division-recommendations/<int:student_id>')
+    api.add_resource(CourseScheduleResource, '/api/course-schedule/<int:student_id>')
+    api.add_resource(StudentPerformanceAnalysisResource, '/api/student-performance-analysis/<int:student_id>')
 
     # إعداد مجدول الإنذارات الأكاديمية
     warning_scheduler = AcademicWarningScheduler(scheduler)
