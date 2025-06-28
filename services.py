@@ -5620,10 +5620,109 @@ class AcademicPathPlanningService:
         self._student_cache = {}      # كاش بيانات الطلاب  
         self._courses_cache = {}      # كاش المقررات
 
+    def _create_standard_response(self, data=None, error=None, response_type='general'):
+        """إنشاء استجابة موحدة مع هيكل ثابت"""
+        if error:
+            return {
+                'status': 'error',
+                'message': error,
+                'data': {},
+                'student_info': None,
+                'recommendations': {
+                    'note': None,
+                    'next_step': None,
+                    'primary': None,
+                    'alternatives': None,
+                    'current_status': None
+                },
+                'plans': None,
+               
+            }
+        
+        # إنشاء نسخة من البيانات للتعديل
+        data_copy = data.copy() if data else {}
+        
+        response = {
+            'status': 'success',
+            'message': 'تم تنفيذ العملية بنجاح',
+            'data': {},
+            'student_info': None,
+            'recommendations': {
+                'note': None,
+                'next_step': None,
+                'primary': None,
+                'alternatives': None,
+                'current_status': None
+            },
+            'plans': None,
+            
+        }
+        
+        # استخراج معلومات الطالب
+        if 'student_info' in data_copy:
+            response['student_info'] = data_copy.pop('student_info')
+        
+        # استخراج وتنظيم التوصيات
+        recommendations = {
+            'note': None,
+            'next_step': None,
+            'primary': None,
+            'alternatives': None,
+            'current_status': None
+        }
+        
+        # استخراج الحقول الأساسية للتوصيات
+        if 'note' in data_copy:
+            recommendations['note'] = data_copy.pop('note')
+        if 'next_step' in data_copy:
+            recommendations['next_step'] = data_copy.pop('next_step')
+        if 'current_status' in data_copy:
+            recommendations['current_status'] = data_copy.pop('current_status')
+        
+        # استخراج التوصية الأساسية
+        if 'smart_recommendation' in data_copy:
+            recommendations['primary'] = data_copy.pop('smart_recommendation')
+        
+        # استخراج البدائل
+        if 'alternative_options' in data_copy:
+            recommendations['alternatives'] = data_copy.pop('alternative_options')
+        
+        # معالجة nested recommendations إذا كانت موجودة
+        if 'recommendations' in data_copy:
+            nested_recommendations = data_copy.pop('recommendations')
+            if isinstance(nested_recommendations, dict):
+                for key, value in nested_recommendations.items():
+                    if key == 'smart_recommendation' and recommendations['primary'] is None:
+                        recommendations['primary'] = value
+                    elif key == 'alternative_options' and recommendations['alternatives'] is None:
+                        recommendations['alternatives'] = value
+                    elif key in ['note', 'next_step', 'current_status'] and recommendations[key] is None:
+                        recommendations[key] = value
+        
+        # تحديث التوصيات في الاستجابة
+        response['recommendations'] = recommendations
+        
+        # استخراج الخطط الدراسية
+        if 'semester_plans' in data_copy:
+            response['plans'] = {
+                'type': data_copy.get('plan_type', 'general'),
+                'semester_plans': data_copy['semester_plans'],
+                'total_semesters': data_copy.get('total_remaining_semesters', 0),
+                'current_stage': data_copy.get('current_stage')
+            }
+            # إزالة الحقول المستخدمة
+            data_copy.pop('semester_plans', None)
+            data_copy.pop('plan_type', None)
+            data_copy.pop('total_remaining_semesters', None)
+        
+        # إضافة باقي البيانات إلى data
+        response['data'].update(data_copy)
+        
+        return response
+
     # تحسين جذري لاستعلامات قاعدة البيانات
     @lru_cache(maxsize=200)
     def _get_student_data_bulk(self, student_id):
-        """استعلام واحد شامل لكل بيانات الطالب - محسن جداً"""
         from models import Students, Enrollments
         
         # استعلام واحد يجلب كل شيء
@@ -5679,13 +5778,11 @@ class AcademicPathPlanningService:
         return courses_data
 
     def _get_completed_course_ids_fast(self, enrollments):
-        """استخراج المقررات المكتملة من البيانات الموجودة - سريع جداً"""
+        """استخراج معرفات المقررات المكتملة من البيانات الموجودة - محسن"""
         completed_ids = []
         for enroll in enrollments:
-            if enroll.Grade:
-                # تحويل الدرجة إلى نص للتعامل مع Decimal objects
-                grade_str = str(enroll.Grade).upper()
-                if grade_str not in ['F', 'W', 'I']:
+            # التحقق من حالة الإكمال بدلاً من الدرجة
+            if hasattr(enroll, 'IsCompleted') and enroll.IsCompleted == "مكتملة":
                     completed_ids.append(enroll.CourseId)
         return completed_ids
 
@@ -5713,8 +5810,8 @@ class AcademicPathPlanningService:
             available_courses = self._get_all_division_data_bulk(division.Id)
             completed_course_ids = self._get_completed_course_ids_fast(enrollments)
             
-            # حساب المعدل من البيانات الموجودة - بدون استعلام إضافي
-            gpa = self._calculate_gpa_from_enrollments(enrollments)
+            # حساب المعدل من حقول GPA في جدول Students - بدون استعلام إضافي
+            gpa = self._calculate_student_gpa(student)
             max_credits = self._get_max_credits(gpa)
             
             plan = None
@@ -5740,7 +5837,8 @@ class AcademicPathPlanningService:
                     'database_queries_reduced': True
                 }
                 
-                return plan
+                # استخدام البنية الموحدة للاستجابة
+                return self._create_standard_response(data=plan)
             else:
                 return self._error_response('نوع الشعبة غير مدعوم')
                 
@@ -5864,10 +5962,9 @@ class AcademicPathPlanningService:
             if semester_number > max_semesters:
                 break
                 
-            semester_key = f'semester_{semester_number}'
             courses = courses_per_semester.get(i, [])
             
-            semester_plans[semester_key] = {
+            semester_plans[semester_number] = {
                 'semester_number': semester_number,
                 'semester_name': f'الترم {semester_number}',
                 'stage': stage,
@@ -6036,7 +6133,7 @@ class AcademicPathPlanningService:
                 semester_courses = self._get_specialization_courses(
                     student, student.division.Name, semester, max_credits
                 )
-                plan[f'semester_{semester}'] = {
+                plan[semester] = {
                     'semester_number': semester,
                     'semester_name': f'الترم {semester} - {student.division.Name}',
                     'courses': semester_courses,
@@ -6044,7 +6141,7 @@ class AcademicPathPlanningService:
                 }
             else:
                 # الترم الأول للتخصص النهائي
-                plan[f'semester_{semester}'] = {
+                plan[semester] = {
                     'semester_number': semester,
                     'semester_name': f'الترم {semester} - تخصص نهائي',
                     'courses': [],
@@ -6073,7 +6170,7 @@ class AcademicPathPlanningService:
             semester_courses = self._get_specialization_courses(
                 student, student.division.Name, semester, max_credits
             )
-            plan[f'semester_{semester}'] = {
+            plan[semester] = {
                 'semester_number': semester,
                 'semester_name': f'الترم {semester} - {student.division.Name}',
                 'courses': semester_courses,
@@ -6139,49 +6236,45 @@ class AcademicPathPlanningService:
         else:
             return 'السنة الثالثة والرابعة - تخصص نهائي'
 
-    def _create_general_semesters_plan(self, student, current_semester, max_credits):
-        """إنشاء خطة للفصول العامة"""
-        plan = {}
+    def _create_general_student_plan(self, student, student_info, current_stage):
+        """إنشاء خطة دراسية للطلاب في المرحلة العامة"""
+        current_semester = student.Semester
+        max_credits = student_info['max_credits_per_semester']
         
-        # تحديد الفصول المتبقية في المرحلة العامة
-        remaining_semesters = []
-        if current_semester == 1:
-            remaining_semesters = [2, 3, 4]
-        elif current_semester == 2:
-            remaining_semesters = [3, 4]
-        elif current_semester == 3:
-            remaining_semesters = [4]
-        elif current_semester == 4:
-            # إذا كان في الترم 4، نعرض فقط خطة الترم التالي (5) كمتخصص
-            remaining_semesters = [5]
+        # تحديد عدد الترمات المتبقية في المرحلة العامة
+        if 'مجموعة العلوم الطبيعية' in current_stage:
+            remaining_semesters = 2 - current_semester  # ترمين في العلوم الطبيعية
+        else:
+            remaining_semesters = 4 - current_semester  # أربع ترمات في البيولوجية/الجيولوجية
+        
+        if remaining_semesters <= 0:
+            return self._error_response('الطالب انتهى من المرحلة العامة')
+        
+        semester_plans = {}
+        
+        for i in range(remaining_semesters):
+            semester_number = current_semester + i + 1
             
-        for semester in remaining_semesters:
-            if semester <= 4:
-                # فصول عامة
-                semester_courses = self._get_general_courses_for_semester(
-                    student, semester, max_credits
-                )
-                plan[f'semester_{semester}'] = {
-                    'semester_number': semester,
-                    'semester_name': f'الترم {semester} - عام',
-                    'courses': semester_courses,
-                    'total_credits': sum(course['credits'] for course in semester_courses),
-                    'course_ratio': self._calculate_course_ratio(semester_courses)
-                }
-            else:
-                # فصول متخصصة (الترم 5 فما فوق)
-                semester_courses = self._get_specialization_courses(
-                    student, 'متخصص', semester, max_credits
-                )
-                plan[f'semester_{semester}'] = {
-                    'semester_number': semester,
-                    'semester_name': f'الترم {semester} - متخصص',
-                    'courses': semester_courses,
-                    'total_credits': sum(course['credits'] for course in semester_courses),
-                    'note': 'يتطلب اختيار التخصص أولاً'
-                }
+            # الحصول على المقررات للترم
+            courses = self._get_general_courses_for_semester(student, semester_number, max_credits)
             
-        return plan
+            semester_plans[semester_number] = {
+                'semester_number': semester_number,
+                'semester_name': f'الترم {semester_number}',
+                'stage': 'المرحلة العامة',
+                'courses': courses,
+                'total_credits': sum(course.get('credits', 0) for course in courses),
+                'note': 'مقررات عامة - لا يوجد تخصص بعد'
+            }
+            
+        return {
+            'student_info': student_info,
+            'plan_type': 'المرحلة العامة',
+            'current_stage': current_stage,
+            'remaining_semesters': remaining_semesters,
+            'semester_plans': semester_plans,
+            'note': 'خطة دراسية للمرحلة العامة - سيتم اختيار التخصص لاحقاً'
+        }
 
     def _create_semester_plan_until(self, student, end_semester, max_credits):
         """إنشاء خطة من الترم الحالي حتى ترم معين"""
@@ -6192,7 +6285,7 @@ class AcademicPathPlanningService:
             semester_courses = self._get_courses_for_semester(
                 student, semester, max_credits
             )
-            plan[f'semester_{semester}'] = {
+            plan[semester] = {
                 'semester_number': semester,
                 'semester_name': f'الترم {semester}',
                 'courses': semester_courses,
@@ -6204,50 +6297,45 @@ class AcademicPathPlanningService:
 
     def _get_general_courses_for_semester(self, student, semester, max_credits):
         """الحصول على المقررات العامة لترم معين مع البيانات الكاملة"""
-        from models import Courses
-        
-        # الحصول على المقررات المتاحة للشعبة
-        available_courses = self._get_available_courses_for_division(student.DivisionId)
+        # استخدام الدالة المحسنة لجلب المقررات
+        available_courses = self._get_all_division_data_bulk(student.DivisionId)
         
         # تصفية المقررات حسب الترم ومتطلبات الطالب
         completed_courses = self._get_completed_course_ids(student.Id)
         
-        # اختيار المقررات بنسبة 3:1 (إجباري:اختياري)
-        mandatory_courses = [c for c in available_courses if c['is_mandatory'] and c['course_id'] not in completed_courses]
-        elective_courses = [c for c in available_courses if not c['is_mandatory'] and c['course_id'] not in completed_courses]
+        # تصفية المقررات غير المكتملة
+        remaining_courses = [c for c in available_courses if c['course_id'] not in completed_courses]
         
+        # توزيع المقررات على الترمات بحيث لا تتكرر
+        courses_per_semester = 3  # عدد المقررات لكل ترم
+        start_index = (semester - student.Semester - 1) * courses_per_semester
+        end_index = start_index + courses_per_semester
+        
+        # اختيار المقررات للترم الحالي
+        semester_courses = remaining_courses[start_index:end_index]
+        
+        # إذا لم تكن كافية، أضف من المقررات المتبقية
+        if len(semester_courses) < courses_per_semester and start_index < len(remaining_courses):
+            additional_courses = remaining_courses[end_index:end_index + (courses_per_semester - len(semester_courses))]
+            semester_courses.extend(additional_courses)
+        
+        # تنسيق البيانات
         selected_courses = []
         total_credits = 0
         
-        # إضافة المقررات الإجبارية أولاً
-        for course_data in mandatory_courses:
-            if total_credits + course_data['credits'] <= max_credits:
-                # الحصول على بيانات المقرر الكاملة من قاعدة البيانات
-                course = Courses.query.get(course_data['course_id'])
-                if course:
-                    selected_courses.append({
-                        'course_id': course.Id,
-                        'course_name': course.Name,
-                        'course_code': course.Code,
-                        'credits': course.Credits
-                    })
-                    total_credits += course.Credits
-                
-        # إضافة بعض المقررات الاختيارية
-        remaining_credits = max_credits - total_credits
-        for course_data in elective_courses:
-            if total_credits + course_data['credits'] <= max_credits and len([c for c in selected_courses if not course_data['is_mandatory']]) < len(selected_courses) // 3:
-                course = Courses.query.get(course_data['course_id'])
-                if course:
-                    selected_courses.append({
-                        'course_id': course.Id,
-                        'course_name': course.Name,
-                        'course_code': course.Code,
-                        'credits': course.Credits
-                    })
-                    total_credits += course.Credits
-                
-        return selected_courses[:6]  # حد أقصى 6 مقررات
+        for course_data in semester_courses:
+            if total_credits + course_data.get('credits', 3) <= max_credits:
+                selected_courses.append({
+                    'course_id': course_data['course_id'],
+                    'name': course_data['name'],
+                    'code': course_data['code'],
+                    'credits': course_data['credits'],
+                    'department_name': course_data['department_name'],
+                    'is_mandatory': course_data['is_mandatory']
+                })
+                total_credits += course_data.get('credits', 3)
+        
+        return selected_courses
 
     def _get_courses_for_semester(self, student, semester, max_credits):
         """الحصول على المقررات لترم معين"""
@@ -6898,17 +6986,40 @@ class AcademicPathPlanningService:
         recommendations = []
         for option in intermediate_options:
             score = self._calculate_intermediate_score(option, performance)
+            level = self._get_recommendation_level(score)
+            
+            # إنشاء أسباب مبسطة
+            reasons = []
+            if 'رياضيات' in option and performance['math_performance_avg'] > 0:
+                reasons.append(f"أداء في الرياضيات: {performance['math_performance_avg']}")
+            if 'فيزياء' in option and performance['physics_performance_avg'] > 0:
+                reasons.append(f"أداء في الفيزياء: {performance['physics_performance_avg']}")
+            if 'كيمياء' in option and performance['chemistry_performance_avg'] > 0:
+                reasons.append(f"أداء في الكيمياء: {performance['chemistry_performance_avg']}")
+            
+            if not reasons:
+                reasons = [f"المعدل التراكمي العام: {performance['overall_gpa']}"]
+            
             recommendations.append({
                 'specialization': option,
-                'suitability_score': score,
-                'recommendation_level': self._get_recommendation_level(score)
+                'suitability_score': round(score, 2),
+                'recommendation_level': level,
+                'brief_reasoning': reasons[:2]  # أقصى سببين
             })
             
         recommendations.sort(key=lambda x: x['suitability_score'], reverse=True)
         
         return {
-            'recommended': recommendations[0],
-            'all_options': recommendations
+            'current_status': 'الطالب في العام الثاني - يحتاج اختيار تشعيب متوسط',
+            'smart_recommendation': {
+                'recommended_specialization': recommendations[0]['specialization'],
+                'confidence_level': recommendations[0]['recommendation_level'],
+                'reasoning': recommendations[0]['brief_reasoning'],
+                'suitability_score': recommendations[0]['suitability_score']
+            },
+            'alternative_options': recommendations[1:] if len(recommendations) > 1 else [],
+            'next_step': 'يُنصح باختيار التشعيب المتوسط الموصى به لبدء الدراسة المتخصصة',
+            'note': f'التوصية مبنية على تحليل أدائك الأكاديمي (المعدل التراكمي: {performance["overall_gpa"]})'
         }
 
     def _calculate_intermediate_score(self, option, performance):
@@ -6931,26 +7042,28 @@ class AcademicPathPlanningService:
             # حساب نقاط الملاءمة
             suitability_score = self._calculate_final_score(option, performance)
             
-            # التحليل المفصل
-            detailed_analysis = self._get_detailed_specialization_analysis(option, performance)
-            
             # تحديد مستوى التوصية
-            confidence_level = "عالي" if suitability_score >= 3.5 else "متوسط" if suitability_score >= 3.0 else "منخفض"
+            confidence_level = self._get_recommendation_level(suitability_score)
             
-            # الأسباب الرئيسية
-            key_reasons = []
-            if detailed_analysis['strengths']:
-                key_reasons.extend(detailed_analysis['strengths'][:2])  # أقوى نقطتين
-            if detailed_analysis['concerns']:
-                key_reasons.extend([f"⚠️ {concern}" for concern in detailed_analysis['concerns'][:1]])
+            # إنشاء أسباب مبسطة
+            reasons = []
+            if 'حيوان' in option and performance['biology_performance_avg'] > 0:
+                reasons.append(f"أداء في الأحياء: {performance['biology_performance_avg']}")
+            if 'كيمياء' in option and performance['chemistry_performance_avg'] > 0:
+                reasons.append(f"أداء في الكيمياء: {performance['chemistry_performance_avg']}")
+            if 'جيولوجيا' in option and performance['geology_performance_avg'] > 0:
+                reasons.append(f"أداء في الجيولوجيا: {performance['geology_performance_avg']}")
+            if 'نبات' in option and performance['biology_performance_avg'] > 0:
+                reasons.append(f"أداء في النبات: {performance['biology_performance_avg']}")
+            
+            if not reasons:
+                reasons = [f"المعدل التراكمي العام: {performance['overall_gpa']}"]
             
             recommendation = {
                 'specialization': option,
                 'suitability_score': round(suitability_score, 2),
-                'confidence_level': confidence_level,
-                'key_reasons': key_reasons,
-                'detailed_analysis': detailed_analysis,
-                'recommendation_text': self._generate_recommendation_text(option, suitability_score, detailed_analysis)
+                'recommendation_level': confidence_level,
+                'brief_reasoning': reasons[:2]  # أقصى سببين
             }
             
             recommendations.append(recommendation)
@@ -6961,26 +7074,17 @@ class AcademicPathPlanningService:
         # التوصية الذكية الرئيسية
         top_recommendation = recommendations[0] if recommendations else None
         
-        # تحليل الأداء العام
-        performance_summary = {
-            'overall_gpa': performance['overall_gpa'],
-            'strongest_subject': self._get_strongest_subject(performance),
-            'weakest_subject': self._get_weakest_subject(performance),
-            'academic_standing': self._get_academic_standing(performance['overall_gpa']),
-            'improvement_areas': self._get_improvement_areas(performance)
-        }
-        
         return {
+            'current_status': f'الطالب يحتاج اختيار تخصص نهائي من مسار: {current_specialization}',
             'smart_recommendation': {
                 'recommended_specialization': top_recommendation['specialization'] if top_recommendation else None,
-                'confidence_level': top_recommendation['confidence_level'] if top_recommendation else 'منخفض',
-                'reasoning': top_recommendation['recommendation_text'] if top_recommendation else 'لا توجد بيانات كافية للتوصية',
-                'suitability_score': top_recommendation['suitability_score'] if top_recommendation else 0,
-                'key_reasons': top_recommendation['key_reasons'] if top_recommendation else []
+                'confidence_level': top_recommendation['recommendation_level'] if top_recommendation else 'منخفض',
+                'reasoning': top_recommendation['brief_reasoning'] if top_recommendation else ['لا توجد بيانات كافية للتوصية'],
+                'suitability_score': top_recommendation['suitability_score'] if top_recommendation else 0
             },
-            'performance_analysis': performance_summary,
-            'all_options': recommendations,
-            'alternative_options': recommendations[1:3] if len(recommendations) > 1 else []
+            'alternative_options': recommendations[1:] if len(recommendations) > 1 else [],
+            'next_step': 'يُنصح بالتقديم للتخصص الموصى به في العام الثالث',
+            'note': f'التوصية مبنية على تحليل أدائك الأكاديمي (المعدل التراكمي: {performance["overall_gpa"]})'
         }
 
     def _generate_recommendation_text(self, specialization, score, analysis):
@@ -7456,10 +7560,7 @@ class AcademicPathPlanningService:
 
     def _error_response(self, message):
         """إنشاء استجابة خطأ موحدة"""
-        return {
-            'message': message,
-            'status': 'error'
-        }
+        return self._create_standard_response(error=message)
 
     def get_division_recommendations(self, student_id):
         """الحصول على توصيات التخصص للطالب"""
@@ -7476,13 +7577,18 @@ class AcademicPathPlanningService:
             # الحصول على التوصيات المناسبة حسب المرحلة
             recommendations = self._get_stage_appropriate_recommendations(student, current_stage)
             
-            return {
-                'message': 'تم الحصول على توصيات التخصص بنجاح',
-                'status': 'success',
+            # إنشاء البيانات بالبنية الموحدة
+            response_data = {
                     'student_info': self._get_basic_student_info(student),
                     'current_stage': current_stage,
-                    'recommendations': recommendations
             }
+            
+            # إضافة التوصيات مباشرة من recommendations object
+            if isinstance(recommendations, dict):
+                for key, value in recommendations.items():
+                    response_data[key] = value
+            
+            return self._create_standard_response(data=response_data)
             
         except Exception as e:
             return self._error_response(f'خطأ في الحصول على التوصيات: {str(e)}')
@@ -7708,7 +7814,11 @@ class AcademicPathPlanningService:
             # الحصول على بيانات الطالب
             student = Students.query.get(student_id)
             if not student:
-                return self._error_response('الطالب غير موجود')
+                return {
+                    'status': 'error',
+                    'message': 'الطالب غير موجود',
+                    'data': None
+                }
             
             # تحديد المرحلة والتخصص الحالي
             current_stage = self._determine_student_stage(student)
@@ -7726,28 +7836,53 @@ class AcademicPathPlanningService:
                 'max_credits_per_semester': max_credits
             }
             
+            # متغير لحفظ النتيجة
+            plan_result = None
+            
             # إنشاء الخطة حسب المرحلة
             if 'العام الأول' in current_stage or 'مجموعة العلوم الطبيعية' in current_stage:
                 # طالب في المرحلة العامة
-                return self._create_general_student_plan(student, student_info, current_stage)
+                plan_result = self._create_general_student_plan(student, student_info, current_stage)
                 
             elif 'آخر ترم قبل التخصص' in current_stage or current_semester == 2:
                 # طالب علوم طبيعية في الترم الثاني - يحتاج خطط متعددة
-                return self._create_pre_specialization_plans(student, student_info)
+                plan_result = self._create_pre_specialization_plans(student, student_info)
                 
             elif 'التشعيب المتوسط' in current_stage or current_semester == 4:
                 # طالب في الترم الرابع - يحتاج خطط متعددة للتخصصات النهائية
-                return self._create_intermediate_stage_plans(student, student_info, current_stage)
+                plan_result = self._create_intermediate_stage_plans(student, student_info, current_stage)
                 
             elif 'التخصص النهائي' in current_stage or current_semester >= 5:
                 # طالب في التخصص النهائي - خطة واحدة لباقي الترمات
-                return self._create_final_stage_plan(student, student_info, current_stage)
+                plan_result = self._create_final_stage_plan(student, student_info, current_stage)
                 
             else:
-                return self._error_response('لا يمكن تحديد المرحلة الدراسية للطالب')
+                return {
+                    'status': 'error',
+                    'message': 'لا يمكن تحديد المرحلة الدراسية للطالب',
+                    'data': None
+                }
+            
+            # التأكد من وجود النتيجة وإرجاعها بالتنسيق المطلوب بدون تكرار
+            if plan_result:
+                return {
+                    'status': 'success',
+                    'message': 'تم إنشاء الخطة الدراسية بنجاح',
+                    'data': plan_result
+                }
+            else:
+                return {
+                    'status': 'error',
+                    'message': 'فشل في إنشاء الخطة الدراسية',
+                    'data': None
+                }
                 
         except Exception as e:
-            return self._error_response(f'خطأ في إنشاء الخطة الدراسية: {str(e)}')
+            return {
+                'status': 'error',
+                'message': f'خطأ في إنشاء الخطة الدراسية: {str(e)}',
+                'data': None
+            }
 
     def _create_general_student_plan(self, student, student_info, current_stage):
         """إنشاء خطة دراسية للطلاب في المرحلة العامة"""
@@ -7767,12 +7902,11 @@ class AcademicPathPlanningService:
         
         for i in range(remaining_semesters):
             semester_number = current_semester + i + 1
-            semester_key = f'semester_{semester_number}'
             
             # الحصول على المقررات للترم
             courses = self._get_general_courses_for_semester(student, semester_number, max_credits)
             
-            semester_plans[semester_key] = {
+            semester_plans[semester_number] = {
                 'semester_number': semester_number,
                 'semester_name': f'الترم {semester_number}',
                 'stage': 'المرحلة العامة',
@@ -7802,7 +7936,7 @@ class AcademicPathPlanningService:
         alternative_path = None
         
         # استخراج المسار الموصى به والمسار البديل
-        if 'smart_recommendation' in recommendations.get('data', {}):
+        if recommendations and 'smart_recommendation' in recommendations.get('data', {}):
             recommended_spec = recommendations['data']['smart_recommendation']['recommended_specialization']
             recommended_path = recommended_spec
             
@@ -7851,13 +7985,16 @@ class AcademicPathPlanningService:
             recommended_spec = recommendations['data']['smart_recommendation']['recommended_specialization']
         
         # إنشاء خطط لكل التخصصات المتاحة
-        plans = {}
+        plans = []
         
         for specialization in available_specializations:
             plan_type = 'المسار الموصى به' if specialization == recommended_spec else 'مسار بديل'
-            plans[f'plan_{specialization.lower().replace(" ", "_")}'] = self._create_final_specialization_path_plan(
+            plan_data = self._create_final_specialization_path_plan(
                 student, student_info, specialization, plan_type
             )
+            # إضافة اسم الخطة إلى البيانات
+            plan_data['plan'] = specialization
+            plans.append(plan_data)
             
         return {
             'student_info': student_info,
@@ -7900,128 +8037,79 @@ class AcademicPathPlanningService:
             }
         
         # إضافة ملاحظة خاصة للترم الأخير
-        if remaining_semesters > 0:
-            last_semester_key = f'semester_{current_semester + remaining_semesters}'
-            if last_semester_key in semester_plans:
-                semester_plans[last_semester_key]['note'] += ' - ترم التخرج'
-                semester_plans[last_semester_key]['graduation_note'] = 'تأكد من استكمال جميع متطلبات التخرج'
+        if f'semester_8' in semester_plans:
+            semester_plans['semester_8']['note'] += ' - ترم التخرج'
         
         return {
             'student_info': student_info,
-            'plan_type': f'خطة التخصص النهائي: {current_specialization}',
+            'plan_type': f'التخصص النهائي: {current_specialization}',
             'current_stage': current_stage,
+            'specialization': current_specialization,
             'remaining_semesters': remaining_semesters,
             'semester_plans': semester_plans,
-            'graduation_info': {
-                'expected_graduation_semester': current_semester + remaining_semesters,
-                'total_semesters_to_complete': remaining_semesters,
-                'note': 'تأكد من اجتياز جميع المقررات المطلوبة للتخرج'
-            }
+            'note': f'خطة دراسية كاملة للتخصص النهائي - {remaining_semesters} ترم متبقي للتخرج'
         }
 
     def _create_specialization_path_plan(self, student, student_info, specialization, plan_type):
-        """إنشاء خطة دراسية لمسار تخصص معين"""
-        current_semester = student.Semester
-        max_credits = student_info['max_credits_per_semester']
-        
-        # إنشاء خطة للترمات القادمة في هذا المسار
-        semester_plans = {}
-        
-        # بدء من الترم التالي
-        for i in range(6):  # 6 ترمات متبقية من الترم 3 إلى 8
-            semester_number = current_semester + i + 1
-            if semester_number > 8:
-                break
-                
-            semester_key = f'semester_{semester_number}'
+        """إنشاء خطة مسار التخصص"""
+        try:
+            student_gpa = self._calculate_student_gpa(student)
+            max_credits = self._get_max_credits(student_gpa)
+            current_semester = student.Semester
             
-            if semester_number <= 4:
-                # ترمات التشعيب المتوسط
-                courses = self._get_intermediate_specialization_courses(
-                    student, specialization, semester_number, max_credits
-                )
-                stage_name = f'التشعيب المتوسط: {specialization}'
-            else:
-                # ترمات التخصص النهائي
-                final_specs = self._get_valid_final_specializations(specialization)
-                if final_specs:
-                    recommended_final = final_specs[0]  # أول تخصص متاح
-                    courses = self._get_specialization_courses_for_semester(
-                        student, recommended_final, semester_number, max_credits
-                    )
-                    stage_name = f'التخصص النهائي: {recommended_final}'
-                else:
-                    courses = []
-                    stage_name = 'غير محدد'
+            semester_plans = []
+            max_semester = 6 if plan_type == "intermediate" else 8
+            remaining_semesters = max(0, max_semester - current_semester)
             
-            semester_plans[semester_key] = {
-                'semester_number': semester_number,
-                'semester_name': f'الترم {semester_number}',
-                'stage': stage_name,
-                'courses': courses,
-                'total_credits': sum(course.get('credits', 0) for course in courses),
-                'note': f'مقررات {plan_type}'
+            for i in range(remaining_semesters):
+                semester_number = current_semester + i + 1
+                if semester_number <= max_semester:
+                    courses = self._get_specialization_courses_for_semester(student, specialization, semester_number, max_credits)
+                    semester_plan = {
+                        "semester_number": semester_number,
+                        "courses": [self._format_course_data(course) for course in courses],
+                        "total_credits": sum(course.get('credits', 0) for course in courses)
+                    }
+                    semester_plans.append(semester_plan)
+            
+            return {
+                "student_info": student_info,
+                "current_stage": f"مسار {specialization}",
+                "semester_plans": semester_plans
             }
-        
-        return {
-            'specialization': specialization,
-            'plan_type': plan_type,
-            'semester_plans': semester_plans,
-            'total_semesters': len(semester_plans)
-        }
+            
+        except Exception as e:
+            return self._error_response(f"خطأ في إنشاء خطة مسار التخصص: {str(e)}")
 
     def _create_final_specialization_path_plan(self, student, student_info, specialization, plan_type):
-        """إنشاء خطة دراسية للتخصص النهائي"""
-        current_semester = student.Semester
-        max_credits = student_info['max_credits_per_semester']
-        
-        # الحصول على جميع المقررات المتاحة مرة واحدة
-        student_data = self._get_student_data_bulk(student.Id)
-        completed_course_ids = self._get_completed_course_ids_fast(student_data['enrollments'])
-        available_courses = self._get_all_division_data_bulk(student.DivisionId)
-        
-        # تصفية المقررات حسب التخصص
-        specialization_courses = self._filter_specialization_courses_fast(available_courses, specialization)
-        if not specialization_courses:
-            specialization_courses = available_courses
-        
-        # تتبع المقررات المقترحة لتجنب التكرار
-        suggested_course_ids = set()
-        semester_plans = {}
-        
-        # بدء من الترم التالي (5 إلى 8)
-        for i in range(4):  # 4 ترمات للتخصص النهائي
-            semester_number = current_semester + i + 1
-            if semester_number > 8:
-                break
-                
-            semester_key = f'semester_{semester_number}'
+        """إنشاء خطة مسار التخصص النهائي"""
+        try:
+            student_gpa = self._calculate_student_gpa(student)
+            max_credits = self._get_max_credits(student_gpa)
+            current_semester = student.Semester
             
-            courses = self._get_specialization_courses_for_specific_semester(
-                specialization_courses, completed_course_ids, suggested_course_ids, 
-                semester_number, max_credits, specialization
-            )
+            semester_plans = []
+            remaining_semesters = max(0, 8 - current_semester)
             
-            # إضافة المقررات المقترحة إلى مجموعة التتبع
-            for course in courses:
-                if course.get('course_id'):
-                    suggested_course_ids.add(course['course_id'])
+            for i in range(remaining_semesters):
+                semester_number = current_semester + i + 1
+                if semester_number <= 8:
+                    courses = self._get_specialization_courses_for_semester(student, specialization, semester_number, max_credits)
+                    semester_plan = {
+                        "semester_number": semester_number,
+                        "courses": [self._format_course_data(course) for course in courses],
+                        "total_credits": sum(course.get('credits', 0) for course in courses)
+                    }
+                    semester_plans.append(semester_plan)
             
-            semester_plans[semester_key] = {
-                'semester_number': semester_number,
-                'semester_name': f'الترم {semester_number}',
-                'stage': f'التخصص النهائي: {specialization}',
-                'courses': courses,
-                'total_credits': sum(course.get('credits', 0) for course in courses),
-                'note': f'مقررات التخصص النهائي - {plan_type}'
+            return {
+                "student_info": student_info,
+                "current_stage": f"التخصص النهائي - {specialization}",
+                "semester_plans": semester_plans
             }
-        
-        return {
-            'specialization': specialization,
-            'plan_type': plan_type,
-            'semester_plans': semester_plans,
-            'total_semesters': len(semester_plans)
-        }
+            
+        except Exception as e:
+            return self._error_response(f"خطأ في إنشاء خطة التخصص النهائي: {str(e)}")
 
     def _get_specialization_courses_for_specific_semester(self, available_courses, completed_course_ids, 
                                                          suggested_course_ids, semester_number, max_credits, specialization):
@@ -8113,10 +8201,10 @@ class AcademicPathPlanningService:
         """تنسيق بيانات المقرر بصيغة موحدة"""
         return {
             'course_id': course_data.get('course_id'),
-            'course_name': course_data.get('name', 'مقرر غير محدد'),
-            'course_code': course_data.get('code', 'غير محدد'),
+            'course_name': course_data.get('name', course_data.get('course_name', 'مقرر غير محدد')),
+            'course_code': course_data.get('code', course_data.get('course_code', 'غير محدد')),
             'credits': course_data.get('credits', 3),
-            'department': course_data.get('department_name', 'غير محدد'),
+            'department': course_data.get('department_name', course_data.get('department', 'غير محدد')),
             'is_mandatory': course_data.get('is_mandatory', False)
         }
 
@@ -8387,15 +8475,16 @@ class AcademicPathPlanningService:
             performance = self._analyze_student_performance(student)
             current_stage = self._determine_student_stage(student)
             
-            return {
-                'message': 'تم تحليل أداء الطالب بنجاح',
-                'status': 'success',
+            # إنشاء البيانات بالبنية الموحدة
+            response_data = {
                 'student_info': self._get_basic_student_info(student),
                 'performance_analysis': performance,
                 'current_stage': current_stage,
                 'academic_standing': self._get_academic_standing(performance['overall_gpa']),
                 'recommendations': self._get_performance_recommendations(performance)
             }
+            
+            return self._create_standard_response(data=response_data)
             
         except Exception as e:
             return self._error_response(f'خطأ في تحليل الأداء: {str(e)}')
