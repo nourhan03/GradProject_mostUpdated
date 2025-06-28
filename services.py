@@ -5583,6 +5583,15 @@ class AcademicStatusAnalysisService:
 
 
 
+from datetime import datetime
+from sqlalchemy import func, and_, or_
+from extensions import db
+from models import Students, Divisions, Enrollments, Courses, CourseDivisions, Departments
+from functools import lru_cache
+import time
+from sqlalchemy.orm import joinedload, selectinload
+import copy
+
 class AcademicPathPlanningService:
     """خدمة التخطيط الأكاديمي المحسنة للسرعة"""
     
@@ -6274,7 +6283,7 @@ class AcademicPathPlanningService:
             'remaining_semesters': remaining_semesters,
             'semester_plans': semester_plans,
             'note': 'خطة دراسية للمرحلة العامة - سيتم اختيار التخصص لاحقاً'
-        }
+                }
 
     def _create_semester_plan_until(self, student, end_semester, max_credits):
         """إنشاء خطة من الترم الحالي حتى ترم معين"""
@@ -7981,7 +7990,7 @@ class AcademicPathPlanningService:
         recommendations = self.get_division_recommendations(student.Id)
         recommended_spec = None
         
-        if 'smart_recommendation' in recommendations.get('data', {}):
+        if recommendations and 'smart_recommendation' in recommendations.get('data', {}):
             recommended_spec = recommendations['data']['smart_recommendation']['recommended_specialization']
         
         # إنشاء خطط لكل التخصصات المتاحة
@@ -8020,7 +8029,7 @@ class AcademicPathPlanningService:
         # إنشاء خطط للترمات المتبقية
         for i in range(remaining_semesters):
             semester_number = current_semester + i + 1
-            semester_key = f'semester_{semester_number}'
+            semester_key = semester_number
             
             # الحصول على مقررات التخصص للترم
             courses = self._get_specialization_courses_for_semester(
@@ -8037,8 +8046,8 @@ class AcademicPathPlanningService:
             }
         
         # إضافة ملاحظة خاصة للترم الأخير
-        if f'semester_8' in semester_plans:
-            semester_plans['semester_8']['note'] += ' - ترم التخرج'
+        if 8 in semester_plans:
+            semester_plans[8]['note'] += ' - ترم التخرج'
         
         return {
             'student_info': student_info,
@@ -8082,23 +8091,46 @@ class AcademicPathPlanningService:
             return self._error_response(f"خطأ في إنشاء خطة مسار التخصص: {str(e)}")
 
     def _create_final_specialization_path_plan(self, student, student_info, specialization, plan_type):
-        """إنشاء خطة مسار التخصص النهائي"""
+        """إنشاء خطة مسار التخصص النهائي مع تجنب التكرار"""
         try:
             student_gpa = self._calculate_student_gpa(student)
             max_credits = self._get_max_credits(student_gpa)
             current_semester = student.Semester
             
+            # الحصول على المقررات المكتملة
+            student_data = self._get_student_data_bulk(student.Id)
+            completed_course_ids = self._get_completed_course_ids_fast(student_data['enrollments'])
+            
+            # الحصول على المقررات المتاحة للشعبة
+            available_courses = self._get_all_division_data_bulk(student.DivisionId)
+            specialization_courses = self._filter_specialization_courses_fast(available_courses, specialization)
+            
+            # إذا لم نجد مقررات متخصصة، استخدم المقررات العامة للشعبة
+            if not specialization_courses:
+                specialization_courses = available_courses
+            
             semester_plans = []
             remaining_semesters = max(0, 8 - current_semester)
+            suggested_course_ids = set()  # تتبع المقررات المقترحة عبر الترمات
             
             for i in range(remaining_semesters):
                 semester_number = current_semester + i + 1
                 if semester_number <= 8:
-                    courses = self._get_specialization_courses_for_semester(student, specialization, semester_number, max_credits)
+                    # الحصول على مقررات الترم مع تجنب التكرار
+                    courses_data = self._get_specialization_courses_for_specific_semester(
+                        specialization_courses, completed_course_ids, suggested_course_ids, 
+                        semester_number, max_credits, specialization
+                    )
+                    
+                    # إضافة معرفات المقررات المقترحة إلى المجموعة
+                    for course in courses_data:
+                        if 'course_id' in course and course['course_id']:
+                            suggested_course_ids.add(course['course_id'])
+                    
                     semester_plan = {
                         "semester_number": semester_number,
-                        "courses": [self._format_course_data(course) for course in courses],
-                        "total_credits": sum(course.get('credits', 0) for course in courses)
+                        "courses": courses_data,
+                        "total_credits": sum(course.get('credits', 0) for course in courses_data)
                     }
                     semester_plans.append(semester_plan)
             
@@ -8113,7 +8145,7 @@ class AcademicPathPlanningService:
 
     def _get_specialization_courses_for_specific_semester(self, available_courses, completed_course_ids, 
                                                          suggested_course_ids, semester_number, max_credits, specialization):
-        """الحصول على مقررات مخصصة لترم معين مع تجنب التكرار"""
+        """الحصول على مقررات مخصصة لترم معين مع تجنب التكرار وضمان التنويع"""
         try:
             # تقسيم المقررات حسب الأولوية والترم
             high_priority_courses = []
@@ -8130,14 +8162,15 @@ class AcademicPathPlanningService:
                 
                 course_semester = course_data.get('semester', 1)
                 is_mandatory = course_data.get('is_mandatory', False)
+                is_relevant = self._is_course_relevant_to_specialization_fast(course_data, specialization)
                 
                 # تصنيف المقررات حسب الأولوية والترم
                 if is_mandatory and course_semester <= semester_number:
                     high_priority_courses.append(course_data)
-                elif (course_semester == semester_number or 
-                      course_semester == semester_number - 1):
+                elif is_relevant and (course_semester == semester_number or 
+                                    course_semester == semester_number - 1):
                     medium_priority_courses.append(course_data)
-                elif self._is_course_relevant_to_specialization_fast(course_data, specialization):
+                elif is_relevant or course_semester <= semester_number + 1:
                     medium_priority_courses.append(course_data)
                 else:
                     low_priority_courses.append(course_data)
@@ -8151,36 +8184,47 @@ class AcademicPathPlanningService:
             ))
             low_priority_courses.sort(key=lambda x: (x.get('semester', 99), -x.get('credits', 0)))
             
-            # بناء قائمة المقررات النهائية
+            # بناء قائمة المقررات النهائية مع ضمان التنويع
             selected_courses = []
             current_credits = 0
+            max_courses_per_department = 3  # حد أقصى للمقررات من نفس القسم
+            department_count = {}
+            
+            # دالة مساعدة لإضافة مقرر مع فحص التنويع
+            def add_course_with_diversity_check(course_data):
+                nonlocal current_credits, selected_courses, department_count
+                
+                if current_credits >= max_credits or len(selected_courses) >= 7:
+                    return False
+                    
+                course = self._format_course_data(course_data)
+                department = course.get('department', 'غير محدد')
+                
+                # فحص حد المقررات لكل قسم
+                if department_count.get(department, 0) >= max_courses_per_department:
+                    return False
+                
+                # فحص إجمالي الساعات
+                if current_credits + course['credits'] <= max_credits:
+                    selected_courses.append(course)
+                    current_credits += course['credits']
+                    department_count[department] = department_count.get(department, 0) + 1
+                    return True
+                    
+                return False
             
             # أولاً: المقررات عالية الأولوية
             for course_data in high_priority_courses:
-                if current_credits >= max_credits:
-                    break
-                course = self._format_course_data(course_data)
-                if current_credits + course['credits'] <= max_credits:
-                    selected_courses.append(course)
-                    current_credits += course['credits']
+                add_course_with_diversity_check(course_data)
             
-            # ثانياً: المقررات متوسطة الأولوية
+            # ثانياً: المقررات متوسطة الأولوية مع التنويع
             for course_data in medium_priority_courses:
-                if current_credits >= max_credits:
-                    break
-                course = self._format_course_data(course_data)
-                if current_credits + course['credits'] <= max_credits:
-                    selected_courses.append(course)
-                    current_credits += course['credits']
+                add_course_with_diversity_check(course_data)
             
             # ثالثاً: المقررات منخفضة الأولوية إذا لم نصل للحد الأقصى
             for course_data in low_priority_courses:
-                if current_credits >= max_credits or len(selected_courses) >= 7:
+                if not add_course_with_diversity_check(course_data):
                     break
-                course = self._format_course_data(course_data)
-                if current_credits + course['credits'] <= max_credits:
-                    selected_courses.append(course)
-                    current_credits += course['credits']
             
             # ضمان الحد الأدنى من المقررات
             if len(selected_courses) == 0:
@@ -8191,6 +8235,21 @@ class AcademicPathPlanningService:
                 
                 for course_data in fallback_courses:
                     selected_courses.append(self._format_course_data(course_data))
+                    if len(selected_courses) >= 4:
+                        break
+            
+            # ضمان الحد الأدنى من الساعات (12 ساعة على الأقل)
+            if current_credits < 12 and len(selected_courses) < 4:
+                additional_courses = [c for c in available_courses 
+                                    if (c.get('course_id') not in completed_course_ids and 
+                                        c.get('course_id') not in suggested_course_ids and
+                                        c.get('course_id') not in [sc.get('course_id') for sc in selected_courses])][:2]
+                
+                for course_data in additional_courses:
+                    course = self._format_course_data(course_data)
+                    if current_credits + course['credits'] <= max_credits:
+                        selected_courses.append(course)
+                        current_credits += course['credits']
             
             return selected_courses[:7]  # حد أقصى 7 مقررات
             
